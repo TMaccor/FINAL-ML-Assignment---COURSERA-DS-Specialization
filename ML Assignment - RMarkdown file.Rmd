@@ -1,0 +1,316 @@
+---
+title: "ML Assignment - Predicting physical activities from sensor accelerometer data"
+author: "Tomás A. Maccor"
+date: "8/4/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr, quietly = TRUE , warn.conflicts = FALSE)
+library(ggplot2, quietly = TRUE)
+library(readr, quietly = TRUE)
+library(caret)
+```
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. 
+
+One thing that people regularly do is quantify how much of a particular activity they do, **but they rarely quantify how well they do it**. 
+
+We will use data from 6 participants of a research project.
+They had 4 accelerometers placed on their bodies in the following locations:
+
+* in a belt they were wearing
+* forearm
+* arm, &
+* in the dumbbell they used for the exercise 
+
+
+**They were asked to perform *dumbbell* lifts correctly and incorrectly in 5 different ways**. 
+More information on this experiment is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har
+
+The 5 different ways of perfoming the exercise were captured in the variable **"classe"** of the above referenced dataset.
+
+The goal of this project is to predict the manner in which they did the exercise, using the Machine Learning Model with the best accuracy (to predict).
+
+
+## Exploratory Data Analysis & data processing
+
+We download the data & perform some preliminary exploration:
+
+```{r, warning=FALSE, echo=FALSE, error=FALSE}
+
+original_trainingset <- read_csv("pml-training.csv")
+validation <- read_csv("pml-testing.csv")
+
+## Validation:    20 observations from 160 variables
+## Training:19622 observations from 160 variables    
+
+## glimpse(original_trainingset)
+
+## unique(original_trainingset$user_name)
+## 6 names -- # of users corresponds to the 6 volunteers
+
+## CLASSE (our observed outcome) has to become a factor variable.
+original_trainingset$classe <- as.factor(original_trainingset$classe)
+
+```
+
+   
+Original_trainingset (**training set**) contains 19622 observations from 160 variables    
+The **validation** dataset contains 20 observations from 160 variables
+
+unique(original_trainingset$user_name)
+6 names in the "user_name" variable  -- the # of users corresponds to the 6 volunteers
+
+There are some **continuous** numerical variables that were read into R as character variables --if we use these variables in our ML algorithm, we will have to transform them appropriately.
+
+We now explore if there is missing values (data) in the dataset:
+
+```{r , echo=TRUE}
+
+TOTAL_NA_values <- sum(is.na(original_trainingset))
+
+
+```
+
+The % of NA values in the DF is high ----> 
+```{r, echo=FALSE}
+print(paste0(round( (TOTAL_NA_values*100)/(19622*160), 2), "%") )
+``` 
+
+If we further review the ORIGINAL TRAINING DATASET, there are many columns that always have NA values -except for ROWS where the ***"new_window"*** variable = "yes". Of note, there are error values in these rows as well: **"#DIV/0!"**.
+
+So we will remove these columns that have NA values  --they have summary statistics data, this is data of a different nature than the raw data that is prevalent in the dataset. We could try to use them as FEATURES for our MODEL #2.
+
+```{r}
+
+training_clean <- original_trainingset[ , colSums(is.na(original_trainingset)) == 0]
+## glimpse(training_clean)
+
+```
+
+This leaves us with a dataset (*training_clean*) containing 60 variables, where all but 2 are NUMERIC/DOUBLE -exceptions are the CLASSE variable (which we wont use for modelling) & user_name  ---which we dont mind since it also wont be part of the data to be fed to the ML model.
+
+So, now we can start splitting our CLEAN TRAINING dataset to start trying out various ML models:
+
+```{r}
+
+set.seed(7)
+traindex <- createDataPartition(training_clean$classe,p = 0.7,list = FALSE)
+train <- training_clean[traindex,]
+test <- training_clean[-traindex,]
+
+```
+
+# 1. MODEL FITTING - using dataset with **RAW** data   
+
+If we want to use MODEL-BASED prediction, variables have to have Gaussian distribution   
+Let's explore if our variables have this distribution   
+We'll explore the variables associated with the BELT sensor:
+
+```{r}
+
+outliers_belt <- select(training_clean, contains("belt"))
+par(mar=c(7,5,1,1))
+boxplot(outliers_belt, main = "Variance of data coming from the BELT sensor", las=2)
+
+```
+
+Seems to be quite a big data spread (variance) in the belt-related data that was collected.   
+Let's check the density distribution of 2-3 variables related to belt, just in case:
+
+
+```{r}
+hist(outliers_belt$roll_belt)
+hist(outliers_belt$accel_belt_y)
+```
+
+We determine that the variables in the dataset which we want to feed in to the ML normal do not have a normal distribution.   
+
+Therefore:   
+1. We can't use model-based ML algorithms (GAMs, polynomial or logistic regression for example)   
+2. We also cannot preprocess with PCA  ---> as the data has way to many outliers for PCA to perform efficiently
+
+
+We also check if there are Near Zero covariates:   
+*nearZeroVar(train[ , 8:59 ], saveMetrics = TRUE)*   
+and there's none.
+
+From literature search (references below), **Random Forest, SVM & k-NN seem to be amongst the ML-learning algorithms that best perform with accelerometer data**:   
+
+* (Zdravevski E, Risteska Stojkoska B, Standl M, Schulz H (2017) - *Automatic machine learning based identification of jogging periods from accelerometer measurements of adolescents
+under field conditions.* **PLoS ONE 12(9): e0184216. https://doi.org/10.1371/journal.pone.0184216**
+* Andrea Mannini, Angelo Maria Sabatini (2010) - *Machine Learning Methods for Classifying Human Physical Activity from On-Body Accelerometers.* **Sensors 2010, 10, 1154-1175. Doi:10.3390/s100201154**   
+
+
+\  
+\  
+
+
+
+Here we will apply the Random Forest & SVM algorithms, and we will also compare them with boosting for RF.
+
+## 1.a - Random Forest algorithm   
+
+```{r}
+### Using RANDOM FOREST  --all 59 predictors
+RF_fit <- train(classe ~ . , data=train[ , -c(1:7)],method="rf")
+RF_fit$finalModel
+pred_test_RF <- predict(RF_fit, test)
+confusionMatrix(pred_test_RF, test$classe)
+```
+
+500 trees were used & no-preprocessing was performed.    
+Cross-validation is achieved by resampling using Bootstrap (25 repetitions).   
+**The ESTIMATED out of sample error rate is 0.64%**.          
+Accuracy AFTER predicting ON the test set:    
+*Confussion Matrix: Accuracy = 0.992  Kappa = 0.990*
+
+The variables most important for splitting the data were the BELT sensor *roll* & *yaw* variables, followed by the *magnet* data from the DUMBBELL:
+
+```{r}
+varImp(RF_fit)
+```
+
+And we can see that just the 2 first BELT variables, we achived the highest ACCURACY:
+
+
+```{r}
+plot(RF_fit)
+```
+
+
+## 1.b - SVM algorithm 
+
+No preprocessing.  Resampling and cross-validation by bootstrapping (25 repetitions)
+
+```{r}
+### Using SVM
+svm_fit <- train(classe ~ . , method="svmLinear", data=train[ , -c(1:7)])
+pred_svm <- predict(svm_fit, test)
+confusionMatrix(pred_svm, test$classe)
+```
+
+This results in a Model Accuracy of 0.78 (when predicting on the TEST dataset).
+
+
+## 1.c - BOOSTING over RF
+
+The following code performs boosting to a RF algorithm:    
+
+boosting_fit <- train(classe ~ . , method="gbm",data=train[ , -c(1:7)],verbose=FALSE)   
+boosting_fit   
+pred_test_Boosting <- predict(boosting_fit, test)   
+confusionMatrix(pred_test_Boosting, test$classe)   
+
+It results in an algorithm with Accuracy = 0.92  -no improvement over the RF algorithm (so results are not shown here).    
+
+\  
+\  
+
+
+# 2. MODEL FITTING - using dataset with **SUMMARISED (CONDENSED)** data   
+
+* Subsetting the ORIGINAL TRAINING dataset, to use only rows where SUMMARY STATS are present (variable "new_window" == "yes)
+* AND removing the columns that do not have summary statistics
+
+```{r, echo=TRUE}
+
+summary_stats_set <- original_trainingset %>% filter(new_window == "yes") %>%
+                     select(-starts_with("roll")) %>% select(-starts_with("pitch")) %>%
+                     select(-starts_with("yaw")) %>% select(-starts_with("total_accel"))  %>%
+                     select(-starts_with("gyros")) %>% select(-starts_with("accel")) %>%
+                     select(-starts_with("magnet"))
+```
+
+### Cleaning Data
+
+* Replacing datapoints that contain #DIV/0! with NA   
+* Removing variables that don't have any values at all
+* Converting continuos numerical variables that were read into R as character variables, into numeric variables
+* Removing Near Zero covariates
+
+
+
+```{r, echo=TRUE}
+
+##Replacing #DIV/0! with NA
+summary_stats_set[summary_stats_set == "#DIV/0!"] <- NA
+summary_stats_set[summary_stats_set == "<NA>"] <- NA
+    
+na_count <-sapply(summary_stats_set, function(y) sum(length(which(is.na(y)))))
+## convert na_count to data.frame
+na_count <- data.frame(na_count)    
+    
+Index_NAs <- which(na_count == 406)
+
+### Removing variables that are completely empty (all NAs)
+summary_stats_set <- summary_stats_set[ , -Index_NAs]
+
+## sum(is.na(summary_stats_set))
+### Still left with 1066 NAs in a DF of dimension 406 * 95 (38570 observations)
+
+summary_stats_set[ , 8:101] <- sapply(summary_stats_set[ , 8:101], as.double)
+
+
+## Remove Near Zero covariates
+x <- nearZeroVar(summary_stats_set[ , 8:101 ], saveMetrics = TRUE)
+Zero_variance <- x$nzv
+Index_0_variance <- which(Zero_variance == TRUE)
+summary_stats_set <- summary_stats_set[ , -c(Index_0_variance)]
+amplitudes <- c("amplitude_yaw_belt", "amplitude_yaw_dumbbell", "amplitude_yaw_forearm")
+summary_stats_set <- select(summary_stats_set, - amplitude_yaw_belt)
+summary_stats_set <- select(summary_stats_set, - amplitude_yaw_dumbbell)
+summary_stats_set <- select(summary_stats_set, - amplitude_yaw_forearm)
+```
+
+
+### Create new training and test datasets
+
+Pre-processing involved (as the algorithms chosen cannot run if there are missing values).   
+We use the "preProcess" function of the CARET package. The chosen method for imputation is knn  imputation.
+
+```{r, echo=TRUE}
+set.seed(27)
+traindex2 <- createDataPartition(summary_stats_set$classe,p = 0.7,list = FALSE)
+train_sum <- summary_stats_set[traindex2,]
+test_sum <- summary_stats_set[-traindex2,]
+
+
+### Impute missing values  ###
+train_sum_imputed <- preProcess(train_sum, method = "knnImpute")
+
+
+### Apply imputation to train & test sets
+train_sum <- predict(train_sum_imputed, newdata = train_sum)
+test_sum <- predict(train_sum_imputed, newdata = test_sum)
+```
+
+Now we run a Random Forest algorithm on this new training dataset, and then compare against the test dataset:
+
+
+```{r, echo = TRUE}
+### Run RF algorithm on TRAINING set & then compare with TEST prediction
+RF_fit_summary <- train(classe ~ . , data=train_sum[ , -c(1:7)], method="rf")
+### Out of sample error = _____%  
+
+pred_summ_RF <- predict(RF_fit_summary, test_sum)
+confusionMatrix(pred_summ_RF, test_sum$classe)
+## Confussion Matrix  - Accuracy = 0.89  Kappa = 0.86
+```
+
+
+The Accuracy using the SUMMARISED data (0.874) is lower than the best model we obtained using RAW data (0.992), therefore we will use or RF algorith on RAW data (model 1.a) on the Validation dataset:
+
+
+```{r, echo = TRUE}
+
+### Predicting with our chosen model, on the VALIDATION set
+Final_prediction <- predict(RF_fit, newdata=validation)
+Final_prediction
+```
+
+
+
